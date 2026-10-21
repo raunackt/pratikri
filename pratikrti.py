@@ -2,13 +2,14 @@ import os
 from select import select
 
 from krita import DockWidget, Krita
-from PyQt5.QtCore import QByteArray, QPoint, QRect, Qt
-from PyQt5.QtGui import QImage, QPainter, QPixmap
+from PyQt5.QtCore import QByteArray, QPoint, QRect, QSettings, Qt
+from PyQt5.QtGui import QImage, QPainter, QPixmap, QTransform
 from PyQt5.QtWidgets import (
     QFileDialog,
     QLabel,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -18,7 +19,13 @@ class PratikrtiDocker(DockWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Pratikrti")
-        self.patter_path = None
+        self.pattern_path = None
+        self.settings = QSettings(
+            QSettings.IniFormat, QSettings.UserScope, "Pratikrti", "Pratikrti"
+        )
+        self.last_folder = self.settings.value(
+            "last_pattern_folder", os.path.expanduser("~"), type=str
+        )
 
         container = QWidget(self)
         layout = QVBoxLayout(container)
@@ -41,6 +48,22 @@ class PratikrtiDocker(DockWidget):
         layout.addWidget(choose_btn)
         choose_btn.clicked.connect(self.choose_pattern)
 
+        layout.addWidget(QLabel("Pattern Scale"))
+
+        self.scale_spin = QSpinBox()
+        self.scale_spin.setRange(10, 300)
+        self.scale_spin.setValue(100)
+        self.scale_spin.setSuffix("%")
+        layout.addWidget(self.scale_spin)
+
+        layout.addWidget(QLabel("Pattern Rotation"))
+
+        self.rotation_spin = QSpinBox()
+        self.rotation_spin.setRange(0, 359)
+        self.rotation_spin.setValue(0)
+        self.rotation_spin.setSuffix("°")
+        layout.addWidget(self.rotation_spin)
+
         self.repeat_btn = QPushButton("Repeat Pattern")
         self.repeat_btn.setEnabled(False)
         self.repeat_btn.clicked.connect(self.repeat_pattern)
@@ -49,10 +72,15 @@ class PratikrtiDocker(DockWidget):
         self.setWidget(container)
 
     def choose_pattern(self):
+        start_folder = self.last_folder
+
+        if not start_folder or not os.path.isdir(start_folder):
+            start_folder = os.path.expanduser("~")
+
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Choose Pattern Image",
-            "",
+            start_folder,
             "PNG Images (*.png);;"
             "JPEG Images (*.jpg *.jpeg);;"
             "BMP Images (*.bmp);;"
@@ -64,7 +92,14 @@ class PratikrtiDocker(DockWidget):
         if not path:
             return
 
-        self.patter_path = path
+        self.pattern_path = path
+        self.last_folder = os.path.dirname(path)
+
+        self.settings.setValue("last_pattern_folder", self.last_folder)
+        self.settings.sync()
+        print("Saved pattern folder:", self.settings.fileName())
+        print("Folder value:", self.settings.value("last_pattern_folder"))
+
         pixmap = QPixmap(path)
         if not pixmap.isNull():
             self.preview_label.setPixmap(
@@ -86,7 +121,7 @@ class PratikrtiDocker(DockWidget):
             QMessageBox.warning(self, "Pratikrti", "No document is open.")
             return
 
-        if not self.patter_path or not os.path.isfile(self.patter_path):
+        if not self.pattern_path or not os.path.isfile(self.pattern_path):
             QMessageBox.warning(self, "Pratikrti", "Please choose a valid file.")
             return
 
@@ -105,10 +140,24 @@ class PratikrtiDocker(DockWidget):
             QMessageBox.warning(self, "Pratikrti", "Not a valid selection.")
             return
 
-        pattern = QImage(self.patter_path)
+        pattern = QImage(self.pattern_path)
         if pattern.isNull():
             QMessageBox.warning(self, "Pratikrti", "Could not read the selected image")
             return
+
+        scale_percent = self.scale_spin.value()
+        scaled_width = max(1, round(pattern.width() * scale_percent / 100))
+        scaled_height = max(1, round(pattern.height() * scale_percent / 100))
+
+        pattern = pattern.scaled(
+            scaled_width, scaled_height, Qt.IgnoreAspectRatio, Qt.SmoothTransformation
+        )
+
+        rotation = self.rotation_spin.value()
+
+        if rotation:
+            transform = QTransform().rotate(rotation)
+            pattern = pattern.transformed(transform, Qt.SmoothTransformation)
 
         pw = pattern.width()
         ph = pattern.height()
@@ -205,7 +254,7 @@ class PratikrtiDocker(DockWidget):
         QMessageBox.information(
             self,
             "Pratikrti",
-            "Pattern image loaded successfully: \n" + self.patter_path,
+            "Pattern image loaded successfully: \n" + self.pattern_path,
         )
 
     def canvasChanged(self, canvas):
